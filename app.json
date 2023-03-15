@@ -28,16 +28,19 @@
     } 
   },
   "options": {
-    "allow-unauthenticated": true,
+    "allow-unauthenticated": false,
     "memory": "8192Mi",
     "cpu": "2"
   },
   "hooks": {
     "prebuild": {
-      "commands": ["./setup/setup_config.sh"]
+      "commands": ["./one_click_deploy/create_files.sh"]
     },
     "postcreate": {
-      "commands": ["./setup/setup_cloud_scheduling.sh"]
+      "commands": [
+        "./gcp/setup.sh deploy_public_index",
+        "./gcp/setup.sh deploy_all",
+        "./gcp/setup.sh start"]
     }
   }
 }
