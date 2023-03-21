@@ -26,9 +26,12 @@ App Reporting Pack fetches all necessary data from Ads API and creates a central
 
 1. A new GCP project with billing account attached
 
-1. Membership in app-reporting-pack-readers-external group(join [here](https://groups.google.com/a/google.com/g/app-reporting-pack-readers-external))
+1. Membership in `app-reporting-pack-readers-external` Google group (join [here](https://groups.google.com/a/google.com/g/app-reporting-pack-readers-external))
 
-1. Oauth2 credentials (Client ID, Client Secret, Refresh token) with Google Ads access. [Instructions video](https://www.youtube.com/watch?v=KFICa7Ngzng)
+1. Credentials for Google Ads API access - `google-ads.yaml`.
+   See details here - https://github.com/google/ads-api-report-fetcher/blob/main/docs/how-to-authenticate-ads-api.md
+   Normally you need OAuth2 credentials (Client ID, Client Secret), a Google Ads developer token and a refresh token.
+
 
 ## Setup
 
@@ -90,7 +93,7 @@ In order to run App Reporting Pack locally please follow the steps outlined belo
 Please run `run-local.sh` script in a terminal to generate all necessary tables for App Reporting Pack:
 
 ```shell
-bash run-local.sh
+bash ./run-local.sh
 ```
 
 It will guide you through a series of questions to get all necessary parameters to run the scripts:
@@ -128,29 +131,50 @@ This command will execute App Reporting Pack queries every day at 1 AM.
 
 You can run App Reporting Pack queries inside a Docker container.
 
-1. Build `app-reporting-pack` image (using `Dockerfile.standalone`):
-
-```
-sudo docker build . -t app-reporting-pack -f Dockerfile.standalone
-```
-
-It will create `app-reporting-pack` docker image you can use later on. It expects the following input:
-
-* `google-ads.yaml` - absolute path to `google-ads.yaml` file
-* `service_account.json` - absolute path to service account json file
-* `config.yaml` - absolute path to YAML config (to generate it please run `run-local.sh` script from *Running locally* section.
-
-2. Run:
-
 ```
 sudo docker run \
     -v /path/to/google-ads.yaml:/google-ads.yaml \
     -v /path/to/service_account.json:/service_account.json \
-    -v /path/to/apr-config.yaml:/config.yaml \
-    app-reporting-pack
+    -v /path/to/app_reporting_pack.yaml:/app_reporting_pack.yaml \
+    ghcr.io/google/app-reporting-pack \
+    -g google-ads.yaml -c app_reporting_pack.yaml --legacy --backfill
 ```
 
 > Don't forget to change /path/to/google-ads.yaml and /path/to/service_account.json with valid paths.
+
+You can provide configs as remote (for example Google Cloud Storage).
+In that case you don't need to mount `google-ads.yaml` and `app_reporting_pack.yaml`
+configs into the container:
+```
+sudo docker run \
+    -v /path/to/service_account.json:/service_account.json \
+    ghcr.io/google/app-reporting-pack \
+    -g gs://project_name/google-ads.yaml \
+    -c gs://project_name/app_reporting_pack.yaml \
+    --legacy --backfill
+```
+
+### Running in Compute Engine with Docker
+First follow the instructions for manual installation above. In the end you will need to have `config.yaml`
+`google-ads.yaml` files. After that you are ready to install.
+Go to gcp folder and run the following command:
+```
+./setup.sh deploy_all
+```
+This will do the followings:
+* enable APIs
+* grant required IAM permissions
+* create a repository in Artifact Repository
+* build a Docker image (using `gcp/workload-vm/Dockerfile` file)
+* publish the image into the repository
+* deploy Cloud Function `create-vm` (from gcp/cloud-functions/create-vm/) (using environment variables in env.yaml file)
+* deploy configs to GCS (config.yaml and google-ads.yaml) (to a bucket with a name of current GCP project id and 'arp' subfolder)
+* create a Scheduler job for publishing a pubsub message with arguments for the CF
+
+What happens when a pubsub message published:
+* the Cloud Function 'create-vm' get a message with arguments and create a virtual machine based a Docker container from the Docker image built during the installation
+* the VM on startup parses the arguments from the CF (via VM's attributes) and execute ARP in quite the same way as it executes locally (using `run-local.sh`). Additionally the VM's entrypoint script deletes the virtual machine upon completion of the run-local.sh.
+
 
 ### Dashboard Replication
 

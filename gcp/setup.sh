@@ -1,7 +1,15 @@
 #!/bin/bash
 
+SETTING_FILE="./settings.ini"
 SCRIPT_PATH=$(readlink -f "$0" | xargs dirname)
 SETTING_FILE="${SCRIPT_PATH}/settings.ini"
+
+# changing the cwd to the script's contining folder so all pathes inside can be local to it
+# (important as the script can be called via absolute path and as a nested path)
+pushd $SCRIPT_PATH
+
+
+
 
 while :; do
     case $1 in
@@ -48,15 +56,14 @@ create_registry() {
 
 build_docker_image() {
   echo "Building and pushing Docker image to Artifact Registry"
-  echo $SCRIPT_PATH
-  gcloud builds submit --config=gcp/cloudbuild.yaml --substitutions=_REPOSITORY="docker",_IMAGE="$IMAGE_NAME",_REPOSITORY_LOCATION="$REPOSITORY_LOCATION" "${SCRIPT_PATH}/.."
+  gcloud builds submit --config=cloudbuild.yaml --substitutions=_REPOSITORY="docker",_IMAGE="$IMAGE_NAME",_REPOSITORY_LOCATION="$REPOSITORY_LOCATION" ./..
 }
 
 
 build_docker_image_gcr() {
   # NOTE: it's an alternative to build_docker_image if you want to use GCR instead of AR
   echo "Building and pushing Docker image to Container Registry"
-  gcloud builds submit --config=cloudbuild-gcr.yaml --substitutions=_IMAGE="workload" "${SCRIPT_PATH}/workload-vm"
+  gcloud builds submit --config=cloudbuild-gcr.yaml --substitutions=_IMAGE="workload" ./workload-vm
 }
 
 
@@ -84,17 +91,26 @@ deploy_cf() {
   create_topic
 
   # create env.yaml from env.yaml.template if it doesn't exist
-  if [ ! -f "${SCRIPT_PATH}/cloud-functions/create-vm/env.yaml" ]; then
+  if [ ! -f ./cloud-functions/create-vm/env.yaml ]; then
     echo "creating env.yaml"
-    cp "${SCRIPT_PATH}/cloud-functions/create-vm/env.yaml.template" "${SCRIPT_PATH}/cloud-functions/create-vm/env.yaml"
+    cp ./cloud-functions/create-vm/env.yaml.template ./cloud-functions/create-vm/env.yaml
   fi
-  # initialize env.yaml - environment variables for CF
+  # initialize env.yaml - environment variables for CF:
+  #   - docker image url
   url="$REPOSITORY_LOCATION-docker.pkg.dev/$PROJECT_ID/docker/$IMAGE_NAME"
-  sed -i'.original' -e "s|#*[[:space:]]*DOCKER_IMAGE[[:space:]]*:[[:space:]]*.*$|DOCKER_IMAGE: $url|" "${SCRIPT_PATH}/cloud-functions/create-vm/env.yaml"
+  sed -i'.original' -e "s|#*[[:space:]]*DOCKER_IMAGE[[:space:]]*:[[:space:]]*.*$|DOCKER_IMAGE: $url|" ./cloud-functions/create-vm/env.yaml
+  #   - GCE VM name (base)
   instance=$(git config -f $SETTING_FILE compute.name)
-  sed -i'.original' -e "s|#*[[:space:]]*INSTANCE_NAME[[:space:]]*:[[:space:]]*.*$|INSTANCE_NAME: $instance|" "${SCRIPT_PATH}/cloud-functions/create-vm/env.yaml"
+  sed -i'.original' -e "s|#*[[:space:]]*INSTANCE_NAME[[:space:]]*:[[:space:]]*.*$|INSTANCE_NAME: $instance|" ./cloud-functions/create-vm/env.yaml
+  #   - GCE machine type
   machine_type=$(git config -f $SETTING_FILE compute.machine-type)
-  sed -i'.original' -e "s|#*[[:space:]]*MACHINE_TYPE[[:space:]]*:[[:space:]]*.*$|MACHINE_TYPE: $machine_type|" "${SCRIPT_PATH}/cloud-functions/create-vm/env.yaml"
+  sed -i'.original' -e "s|#*[[:space:]]*MACHINE_TYPE[[:space:]]*:[[:space:]]*.*$|MACHINE_TYPE: $machine_type|" ./cloud-functions/create-vm/env.yaml
+  #   - GCE Region
+  gce_region=$(git config -f $SETTING_FILE compute.region)
+  sed -i'.original' -e "s|#*[[:space:]]*REGION[[:space:]]*:[[:space:]]*.*$|REGION: $gce_region|" ./cloud-functions/create-vm/env.yaml
+  #   - GCE Zone
+  gce_zone=$(git config -f $SETTING_FILE compute.zone)
+  sed -i'.original' -e "s|#*[[:space:]]*ZONE[[:space:]]*:[[:space:]]*.*$|ZONE: $gce_zone|" ./cloud-functions/create-vm/env.yaml
 
   # deploy CF (pubsub triggered)
   gcloud functions deploy $CF_NAME \
@@ -105,8 +121,8 @@ deploy_cf() {
       --region=$CF_REGION \
       --quiet \
       --gen2 \
-      --env-vars-file "${SCRIPT_PATH}/cloud-functions/create-vm/env.yaml" \
-      --source="${SCRIPT_PATH}/cloud-functions/create-vm/"
+      --env-vars-file ./cloud-functions/create-vm/env.yaml \
+      --source=./cloud-functions/create-vm/
 }
 
 
@@ -115,8 +131,8 @@ deploy_config() {
   gsutil mb -b on gs://$PROJECT_ID
 
   GCS_BASE_PATH=gs://$PROJECT_ID/$NAME
-  gsutil -h "Content-Type:text/plain" cp "${SCRIPT_PATH}/../config.yaml" $GCS_BASE_PATH/config.yaml
-  gsutil -h "Content-Type:text/plain" cp "${SCRIPT_PATH}/../google-ads.yaml" $GCS_BASE_PATH/google-ads.yaml
+  gsutil -h "Content-Type:text/plain" cp ./../config.yaml $GCS_BASE_PATH/config.yaml
+  gsutil -h "Content-Type:text/plain" cp ./../google-ads.yaml $GCS_BASE_PATH/google-ads.yaml
 }
 
 deploy_public_index() {
@@ -139,14 +155,20 @@ get_run_data() {
   #   * project_id
   #   * machine_type
   #   * service_account
+  #   * ads_config_uri
+  #   * config_uri
+  #   * docker_image
   GCS_BASE_PATH=gs://$PROJECT_ID/$NAME
   GCS_BASE_PATH_PUBLIC=gs://${PROJECT_ID}-public/$NAME
-  data=('{
-    "docker_image": "'$REPOSITORY_LOCATION'-docker.pkg.dev/'$PROJECT_ID'/docker/'$IMAGE_NAME'", 
+  # NOTE for the commented code:
+  # currently deploy_cf target puts a docker image url into env.yaml for CF, so there's no need to pass an image url via arguments,
+  # but if you want to support several images simultaneously (e.g. with different tags) then image url can be passed via message as:
+  #    "docker_image": "'$REPOSITORY_LOCATION'-docker.pkg.dev/'$PROJECT_ID'/docker/'$IMAGE_NAME'",
+  data='{
     "config_uri": "'$GCS_BASE_PATH'/config.yaml",
     "ads_config_uri": "'$GCS_BASE_PATH'/google-ads.yaml",
     "gcs_base_path_public": "'$GCS_BASE_PATH_PUBLIC'"
-  }')
+  }'
   echo $data
 }
 
@@ -192,6 +214,7 @@ schedule_run() {
   echo 'Scheduling a job with args: '$DATA
 
   gcloud scheduler jobs delete $JOB_NAME --location $REGION --quiet
+
   gcloud scheduler jobs create pubsub $JOB_NAME \
     --schedule="$SCHEDULE" \
     --location=$REGION \
@@ -220,3 +243,5 @@ for i in "$@"; do
     exit $exitcode
   fi
 done
+
+popd
