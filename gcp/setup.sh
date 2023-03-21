@@ -1,4 +1,8 @@
-SETTING_FILE="./settings.ini"
+#!/bin/bash
+
+SCRIPT_PATH=$(readlink -f "$0" | xargs dirname)
+SETTING_FILE="${SCRIPT_PATH}/settings.ini"
+
 while :; do
     case $1 in
   -s|--settings)
@@ -15,6 +19,7 @@ REPOSITORY=$(git config -f $SETTING_FILE repository.name)
 IMAGE_NAME=$(git config -f $SETTING_FILE repository.image)
 REPOSITORY_LOCATION=$(git config -f $SETTING_FILE repository.location)
 TOPIC=$(git config -f $SETTING_FILE pubsub.topic)
+NAME=$(git config -f $SETTING_FILE config.name)
 
 PROJECT_ID=$(gcloud config get-value project 2> /dev/null)
 PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="csv(projectNumber)" | tail -n 1)
@@ -43,14 +48,14 @@ create_registry() {
 
 build_docker_image() {
   echo "Building and pushing Docker image to Artifact Registry"
-  gcloud builds submit --config=cloudbuild.yaml --substitutions=_REPOSITORY="docker",_IMAGE="$IMAGE_NAME",_REPOSITORY_LOCATION="$REPOSITORY_LOCATION" ./.. 
+  gcloud builds submit --config=gcp/cloudbuild.yaml --substitutions=_REPOSITORY="docker",_IMAGE="$IMAGE_NAME",_REPOSITORY_LOCATION="$REPOSITORY_LOCATION" "${SCRIPT_PATH}/.."
 }
 
 
 build_docker_image_gcr() {
   # NOTE: it's an alternative to build_docker_image if you want to use GCR instead of AR
   echo "Building and pushing Docker image to Container Registry"
-  gcloud builds submit --config=cloudbuild-gcr.yaml --substitutions=_IMAGE="workload" ./workload-vm
+  gcloud builds submit --config=cloudbuild-gcr.yaml --substitutions=_IMAGE="workload" "${SCRIPT_PATH}/workload-vm"
 }
 
 
@@ -78,17 +83,17 @@ deploy_cf() {
   create_topic
 
   # create env.yaml from env.yaml.template if it doesn't exist
-  if [ ! -f ./cloud-functions/create-vm/env.yaml ]; then
+  if [ ! -f "${SCRIPT_PATH}/cloud-functions/create-vm/env.yaml" ]; then
     echo "creating env.yaml"
-    cp ./cloud-functions/create-vm/env.yaml.template ./cloud-functions/create-vm/env.yaml
+    cp "${SCRIPT_PATH}/cloud-functions/create-vm/env.yaml.template" "${SCRIPT_PATH}/cloud-functions/create-vm/env.yaml"
   fi
   # initialize env.yaml - environment variables for CF
   url="$REPOSITORY_LOCATION-docker.pkg.dev/$PROJECT_ID/docker/$IMAGE_NAME"
-  sed -i'.original' -e "s|#*[[:space:]]*DOCKER_IMAGE[[:space:]]*:[[:space:]]*.*$|DOCKER_IMAGE: $url|" ./cloud-functions/create-vm/env.yaml
+  sed -i'.original' -e "s|#*[[:space:]]*DOCKER_IMAGE[[:space:]]*:[[:space:]]*.*$|DOCKER_IMAGE: $url|" "${SCRIPT_PATH}/cloud-functions/create-vm/env.yaml"
   instance=$(git config -f $SETTING_FILE compute.name)
-  sed -i'.original' -e "s|#*[[:space:]]*INSTANCE_NAME[[:space:]]*:[[:space:]]*.*$|INSTANCE_NAME: $instance|" ./cloud-functions/create-vm/env.yaml
+  sed -i'.original' -e "s|#*[[:space:]]*INSTANCE_NAME[[:space:]]*:[[:space:]]*.*$|INSTANCE_NAME: $instance|" "${SCRIPT_PATH}/cloud-functions/create-vm/env.yaml"
   machine_type=$(git config -f $SETTING_FILE compute.machine-type)
-  sed -i'.original' -e "s|#*[[:space:]]*MACHINE_TYPE[[:space:]]*:[[:space:]]*.*$|MACHINE_TYPE: $machine_type|" ./cloud-functions/create-vm/env.yaml
+  sed -i'.original' -e "s|#*[[:space:]]*MACHINE_TYPE[[:space:]]*:[[:space:]]*.*$|MACHINE_TYPE: $machine_type|" "${SCRIPT_PATH}/cloud-functions/create-vm/env.yaml"
 
   # deploy CF (pubsub triggered)
   gcloud functions deploy $CF_NAME \
@@ -99,19 +104,18 @@ deploy_cf() {
       --region=$CF_REGION \
       --quiet \
       --gen2 \
-      --env-vars-file ./cloud-functions/create-vm/env.yaml \
-      --source=./cloud-functions/create-vm/
+      --env-vars-file "${SCRIPT_PATH}/cloud-functions/create-vm/env.yaml" \
+      --source="${SCRIPT_PATH}/cloud-functions/create-vm/"
 }
 
 
 deploy_config() {
   echo 'Deploying config to GCS'
-  NAME=$(git config -f $SETTING_FILE config.name)
   gsutil mb -b on gs://$PROJECT_ID
 
   GCS_BASE_PATH=gs://$PROJECT_ID/$NAME
-  gsutil -h "Content-Type:text/plain" cp ./../config.yaml $GCS_BASE_PATH/config.yaml
-  gsutil -h "Content-Type:text/plain" cp ./../google-ads.yaml $GCS_BASE_PATH/google-ads.yaml
+  gsutil -h "Content-Type:text/plain" cp "${SCRIPT_PATH}/../config.yaml" $GCS_BASE_PATH/config.yaml
+  gsutil -h "Content-Type:text/plain" cp "${SCRIPT_PATH}/../google-ads.yaml" $GCS_BASE_PATH/google-ads.yaml
 }
 
 
@@ -120,7 +124,6 @@ get_run_data() {
   #   * project_id
   #   * machine_type
   #   * service_account
-  NAME=$(git config -f $SETTING_FILE config.name)
   GCS_BASE_PATH=gs://$PROJECT_ID/$NAME
   data='{
     "docker_image": "'$REPOSITORY_LOCATION'-docker.pkg.dev/'$PROJECT_ID'/docker/'$IMAGE_NAME'", 
@@ -161,7 +164,6 @@ schedule_run() {
   echo 'Scheduling a job with args: '$DATA
 
   gcloud scheduler jobs delete $JOB_NAME --location $REGION --quiet
-
   gcloud scheduler jobs create pubsub $JOB_NAME \
     --schedule="$SCHEDULE" \
     --location=$REGION \
