@@ -16,7 +16,7 @@ function getVMConfig(projectId, dockerImageUrl, serviceAccount, machineType)  {
       "kind": "compute#instance",
       "zone": `projects/${projectId}/zones/${zone}`,
       "machineType": `projects/${projectId}/zones/${zone}/machineTypes/${machineType}`,
-      "os": "cos",
+      "os": "cos-stable",
       "displayDevice": {
         "enableDisplay": false
       },
@@ -144,6 +144,14 @@ functions.cloudEvent('createInstance', async (cloudEvent) => {
     vmConfig.metadata.items.push({
       "key": "ads_config_uri",
       "value": ads_config_uri.trim()
+    });
+  }
+
+  const gcs_base_path_public = data.gcs_base_path_public;
+  if (gcs_base_path_public && gcs_base_path_public.trim().length > 1) {
+    vmConfig.metadata.items.push({
+      "key": "gcs_base_path_public",
+      "value": gcs_base_path_public.trim()
     });
   }
 

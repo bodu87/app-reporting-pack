@@ -4,6 +4,9 @@ LOG_NAME=arp-vm
 
 echo "Starting entrypoint script"
 
+echo "--- Test ---"
+echo "All Instance Metadata - $(curl "http://metadata.google.internal/computeMetadata/v1/instance/attributes/?recursive=true&alt=text" -H "Metadata-Flavor: Google")"
+
 # Fetch GCP project_id from Metadata service and set it via gcloud
 project_id=$(curl -H Metadata-Flavor:Google http://metadata.google.internal/computeMetadata/v1/project/project-id -s)
 echo "Detected project id from metadata server: $project_id"
@@ -35,6 +38,15 @@ else
   gcloud logging write $LOG_NAME "[$(hostname)] ARP application has finished execution successfully"
 fi
 
+# Create URL for dashboard with Linking API
+dashboard_url=$(./../../scripts/create_dashboard.sh -L)
+
+# Update index.html with newly created URL and upload to gcs
+if [ -n "$dashboard_url" ]; then
+  gcs_base_path_public=$(curl -H Metadata-Flavor:Google http://metadata.google.internal/computeMetadata/v1/instance/attributes/gcs_base_path_public -s --fail)
+  echo "{\"dashboardUrl\":\"$dashboard_url\"}" > dashboard.json
+  gsutil -h "Content-Type:text/plain" cp dashboard.json $gcs_base_path_public/dashboard.json
+fi
 
 # Delete the VM (fetch a custom metadata key, it can be absent, so returns 404 - handling it with --fail options)
 delete_vm=$(curl -H Metadata-Flavor:Google http://metadata.google.internal/computeMetadata/v1/instance/attributes/delete_vm -s --fail)
