@@ -30,7 +30,7 @@ gcloud logging write $LOG_NAME "[$(hostname)] Starting ARP application (config: 
 # run ARP
 #./run-docker.sh "google_ads_queries/*/*.sql" "bq_queries" "$ads_config_uri" "$config_uri"
 # TODO: --backfill, --legacy
-./run-local.sh --quiet --config $config_uri --google-ads-config $ads_config_uri 
+./run-local.sh --quiet --config $config_uri --google-ads-config $ads_config_uri
 exitcode=$?
 if [ $exitcode -ne 0 ]; then
   gcloud logging write $LOG_NAME "[$(hostname)] ARP application has finished execution with an error" --severity ERROR
@@ -46,6 +46,17 @@ if [ -n "$dashboard_url" ]; then
   gcs_base_path_public=$(curl -H Metadata-Flavor:Google http://metadata.google.internal/computeMetadata/v1/instance/attributes/gcs_base_path_public -s --fail)
   echo "{\"dashboardUrl\":\"$dashboard_url\"}" > dashboard.json
   gsutil -h "Content-Type:text/plain" cp dashboard.json $gcs_base_path_public/dashboard.json
+fi
+
+# Check if index.html exists in the bucket. If so - create and upload dashboard.json
+
+gcs_base_path_public=$(curl -H Metadata-Flavor:Google http://metadata.google.internal/computeMetadata/v1/instance/attributes/gcs_base_path_public -s --fail)
+INDEX_EXISTS="$gcs_base_path_public/index.html"
+
+if [[ $INDEX_EXISTS -eq 1 ]]; then
+  dashboard_url=$(./../../scripts/create_dashboard.sh -L)
+  echo "{\"dashboardUrl\":\"$dashboard_url\"}" > dashboard.json
+  gsutil -h "Content-Type:application/json" cp dashboard.json $gcs_base_path_public/dashboard.json
 fi
 
 # Delete the VM (fetch a custom metadata key, it can be absent, so returns 404 - handling it with --fail options)

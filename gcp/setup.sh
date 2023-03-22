@@ -8,9 +8,6 @@ SETTING_FILE="${SCRIPT_PATH}/settings.ini"
 # (important as the script can be called via absolute path and as a nested path)
 pushd $SCRIPT_PATH
 
-
-
-
 while :; do
     case $1 in
   -s|--settings)
@@ -143,10 +140,10 @@ deploy_public_index() {
   exitcode=$?
   if [ $exitcode -ne 0 ]; then
     echo "Could not add public access to public cloud bucket"
+  else
+    GCS_BASE_PATH_PUBLIC=gs://${PROJECT_ID}-public/$NAME
+    gsutil -h "Content-Type:text/plain" cp "${SCRIPT_PATH}/../gcp/cloud-run-button/index.html" $GCS_BASE_PATH_PUBLIC/index.html
   fi
-
-  GCS_BASE_PATH_PUBLIC=gs://${PROJECT_ID}-public/$NAME
-  gsutil -h "Content-Type:text/plain" cp "${SCRIPT_PATH}/../one_click_deploy/index.html" $GCS_BASE_PATH_PUBLIC/index.html
 }
 
 
@@ -181,11 +178,11 @@ get_run_data_escaped() {
 
 start() {
   # args for the cloud function (create-vm) passed via pub/sub event:
-  #   * project_id - 
+  #   * project_id -
   #   * docker_image - a docker image url, can be CR or AR
   #       gcr.io/$PROJECT_ID/workload
   #       europe-docker.pkg.dev/$PROJECT_ID/docker/workload
-  #   * service_account 
+  #   * service_account
   # --message="{\"project_id\":\"$PROJECT_ID\", \"docker_image\":\"europe-docker.pkg.dev/$PROJECT_ID/docker/workload\", \"service_account\":\"$SERVICE_ACCOUNT\"}"
 
   local DATA=$(get_run_data)
@@ -194,13 +191,18 @@ start() {
 
   # Check if there is a public bucket and index.html and echo the url
   INDEX_PATH="${PROJECT_ID}-public/$NAME"
-  IS_INDEX_EXIST=$(gsutil ls gs://"$INDEX_PATH" | grep 'index.html' )
-  if [[ -n $IS_INDEX_EXIST ]]; then
-    GREEN='\033[0;32m'
-    LIGHT_GREEN='\033[1;32m'
-    NC='\033[0m'
+  PUBLIC_URL="https://storage.googleapis.com/${INDEX_PATH}/index.html"
+  STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" $PUBLIC_URL)
 
-    echo -e "${GREEN}[ * ] To access your new dashboard, click this link - ${LIGHT_GREEN}https://storage.googleapis.com/${INDEX_PATH}/index.html${NC}"
+  GREEN='\033[0;32m'
+  CYAN='\033[0;36m'
+  NC='\033[0m'
+
+  if [[ $STATUS_CODE -eq 200 ]]; then
+    echo -e "${CYAN}[ * ] To access your new dashboard, click this link - ${GREEN}https://storage.googleapis.com/${INDEX_PATH}/index.html${NC}"
+  else
+    echo -e "${CYAN}[ * ] Your GCP project does not allow public access.${NC}"
+    echo -e "${CYAN}[ * ] To create your dashboard template, please run the ${GREEN}create_dashboard${CYAN} shell script once the installation process completes and all the relevant tables have been created in the DB.${NC}"
   fi
 }
 
